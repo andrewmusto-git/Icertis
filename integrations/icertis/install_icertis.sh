@@ -28,6 +28,8 @@ BRANCH="${BRANCH:-main}"
 INTEGRATION_SUBDIR="integrations/${INTEGRATION_SLUG}"
 NON_INTERACTIVE=false
 OVERWRITE_ENV=false
+SETUP_CRON=false
+RUN_NOW=false
 
 # Detect OS package manager
 PKG_MGR=""
@@ -78,6 +80,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --non-interactive) NON_INTERACTIVE=true ;;
         --overwrite-env)   OVERWRITE_ENV=true   ;;
+        --setup-cron)      SETUP_CRON=true       ;;
+        --run-now)         RUN_NOW=true          ;;
         --install-dir)     INSTALL_DIR="$2"; SCRIPTS_DIR="${INSTALL_DIR}/scripts"; LOGS_DIR="${INSTALL_DIR}/logs"; shift ;;
         --repo-url)        REPO_URL="$2"; shift ;;
         --branch)          BRANCH="$2"; shift ;;
@@ -167,7 +171,8 @@ else
 
     if [[ "${NON_INTERACTIVE}" == "true" ]]; then
         # Require all values from environment in non-interactive mode
-        : "${ICERTIS_BASE_URL:?ICERTIS_BASE_URL must be set}"
+        : "${ICERTIS_API_URL:?ICERTIS_API_URL must be set}"
+        : "${ICERTIS_BUSINESS_API_URL:?ICERTIS_BUSINESS_API_URL must be set}"
         : "${ICERTIS_TOKEN_URL:?ICERTIS_TOKEN_URL must be set}"
         : "${ICERTIS_CLIENT_ID:?ICERTIS_CLIENT_ID must be set}"
         : "${ICERTIS_CLIENT_SECRET:?ICERTIS_CLIENT_SECRET must be set}"
@@ -176,7 +181,8 @@ else
         scope_val="${ICERTIS_SCOPE:-api://6c49748d-db77-4577-b9d0-e31330bc889c/.default}"
     else
         # Interactive prompts — read from /dev/tty so curl|bash piping works
-        IFS= read -r -p "Icertis base URL (e.g. https://yourcompany.icertis.com): " ICERTIS_BASE_URL </dev/tty
+        IFS= read -r -p "Icertis API URL for users/groups (e.g. https://yourcompany-api.icertis.com): " ICERTIS_API_URL </dev/tty
+        IFS= read -r -p "Icertis Business API URL for org units (e.g. https://yourcompany-business-api.icertis.com): " ICERTIS_BUSINESS_API_URL </dev/tty
         IFS= read -r -p "OAuth2 token URL (e.g. https://login.microsoftonline.com/<tid>/oauth2/v2.0/token): " ICERTIS_TOKEN_URL </dev/tty
         IFS= read -r -p "OAuth2 client ID: " ICERTIS_CLIENT_ID </dev/tty
         IFS= read -r -s -p "OAuth2 client secret: " ICERTIS_CLIENT_SECRET </dev/tty; echo >/dev/tty
@@ -189,7 +195,8 @@ else
 
     cat > "${env_file}" <<EOF
 # Icertis Source Configuration
-ICERTIS_BASE_URL=${ICERTIS_BASE_URL}
+ICERTIS_API_URL=${ICERTIS_API_URL}
+ICERTIS_BUSINESS_API_URL=${ICERTIS_BUSINESS_API_URL}
 ICERTIS_TOKEN_URL=${ICERTIS_TOKEN_URL}
 ICERTIS_CLIENT_ID=${ICERTIS_CLIENT_ID}
 ICERTIS_CLIENT_SECRET=${ICERTIS_CLIENT_SECRET}
@@ -205,6 +212,54 @@ VEZA_API_KEY=${VEZA_API_KEY}
 EOF
     chmod 600 "${env_file}"
     ok ".env written and secured (chmod 600)"
+fi
+
+# ---------------------------------------------------------------------------
+# Cron job setup
+# ---------------------------------------------------------------------------
+if [[ "${NON_INTERACTIVE}" == "false" && "${SETUP_CRON}" == "false" ]]; then
+    IFS= read -r -p "[SETUP] Set up daily cron job to push data to Veza at 02:00? [y/N]: " _cron_answer </dev/tty
+    [[ "${_cron_answer,,}" == "y" ]] && SETUP_CRON=true
+fi
+
+if [[ "${SETUP_CRON}" == "true" ]]; then
+    info "Setting up cron job..."
+    cron_wrapper="${SCRIPTS_DIR}/run_icertis.sh"
+    cat > "${cron_wrapper}" <<'CRONEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPTS_DIR}/venv/bin/activate"
+python3 "${SCRIPTS_DIR}/icertis.py" --env-file "${SCRIPTS_DIR}/.env"
+CRONEOF
+    chmod +x "${cron_wrapper}"
+    CRON_USER=$(whoami)
+    CRON_FILE="/etc/cron.d/icertis-veza"
+    if [[ -w /etc/cron.d ]]; then
+        echo "0 2 * * * ${CRON_USER} ${cron_wrapper} >> ${LOGS_DIR}/cron.log 2>&1" > "${CRON_FILE}"
+        chmod 644 "${CRON_FILE}"
+        ok "Cron job created: ${CRON_FILE} (daily at 02:00 as ${CRON_USER})"
+    else
+        warn "Cannot write to /etc/cron.d — run as root or add manually:"
+        warn "  echo \"0 2 * * * ${CRON_USER} ${cron_wrapper} >> ${LOGS_DIR}/cron.log 2>&1\" | sudo tee ${CRON_FILE}"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Optional first-run push
+# ---------------------------------------------------------------------------
+if [[ "${NON_INTERACTIVE}" == "false" && "${RUN_NOW}" == "false" ]]; then
+    IFS= read -r -p "[SETUP] Run the integration now to perform the initial push to Veza? [y/N]: " _run_answer </dev/tty
+    [[ "${_run_answer,,}" == "y" ]] && RUN_NOW=true
+fi
+
+if [[ "${RUN_NOW}" == "true" ]]; then
+    info "Running integration — initial push to Veza..."
+    if "${SCRIPTS_DIR}/venv/bin/python3" "${SCRIPTS_DIR}/icertis.py" --env-file "${env_file}"; then
+        ok "Initial push to Veza completed successfully"
+    else
+        warn "Integration run finished with errors — review logs in ${LOGS_DIR}"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -232,4 +287,12 @@ echo "    python3 icertis.py"
 echo ""
 echo "    # Run preflight checks:"
 echo "    bash preflight_icertis.sh --all"
+echo ""
+echo "  Automation:"
+echo ""
+echo "    # To push data to Veza on a schedule, ensure the cron job is in place:"
+echo "    cat /etc/cron.d/icertis-veza"
+echo ""
+echo "    # Or re-run the installer with --setup-cron --run-now to set it up now:"
+echo "    bash install_icertis.sh --setup-cron --run-now"
 echo ""

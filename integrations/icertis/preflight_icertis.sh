@@ -136,7 +136,7 @@ check_configuration() {
         return
     fi
 
-    local required_vars=("ICERTIS_BASE_URL" "ICERTIS_TOKEN_URL" "ICERTIS_CLIENT_ID" "ICERTIS_CLIENT_SECRET" "ICERTIS_SCOPE" "VEZA_URL" "VEZA_API_KEY")
+    local required_vars=("ICERTIS_API_URL" "ICERTIS_BUSINESS_API_URL" "ICERTIS_TOKEN_URL" "ICERTIS_CLIENT_ID" "ICERTIS_CLIENT_SECRET" "ICERTIS_SCOPE" "VEZA_URL" "VEZA_API_KEY")
     for var in "${required_vars[@]}"; do
         val="${!var:-}"
         if [[ -z "${val}" ]]; then
@@ -161,20 +161,33 @@ check_configuration() {
 check_network() {
     section "4. Network Connectivity"
 
-    local base_url="${ICERTIS_BASE_URL:-}"
+    local api_url="${ICERTIS_API_URL:-}"
+    local business_api_url="${ICERTIS_BUSINESS_API_URL:-}"
     local veza_url="${VEZA_URL:-}"
 
-    if [[ -z "${base_url}" ]]; then
-        fail "ICERTIS_BASE_URL not set — skipping Icertis connectivity check"
+    if [[ -z "${api_url}" ]]; then
+        fail "ICERTIS_API_URL not set — skipping Icertis API connectivity check"
     else
-        local host port
-        host=$(echo "${base_url}" | sed -E 's|https?://([^/:]+).*|\1|')
-        port=443
-        info "Testing TCP ${host}:${port}..."
-        if timeout 5 bash -c "echo >/dev/tcp/${host}/${port}" 2>/dev/null; then
-            pass "Icertis host reachable: ${host}:${port}"
+        local host
+        host=$(echo "${api_url}" | sed -E 's|https?://([^/:]+).*|\1|')
+        info "Testing TCP ${host}:443..."
+        if timeout 5 bash -c "echo >/dev/tcp/${host}/443" 2>/dev/null; then
+            pass "Icertis API host reachable: ${host}:443"
         else
-            fail "Cannot reach ${host}:${port} — check network/firewall"
+            fail "Cannot reach ${host}:443 — check network/firewall"
+        fi
+    fi
+
+    if [[ -z "${business_api_url}" ]]; then
+        fail "ICERTIS_BUSINESS_API_URL not set — skipping Business API connectivity check"
+    else
+        local biz_host
+        biz_host=$(echo "${business_api_url}" | sed -E 's|https?://([^/:]+).*|\1|')
+        info "Testing TCP ${biz_host}:443..."
+        if timeout 5 bash -c "echo >/dev/tcp/${biz_host}/443" 2>/dev/null; then
+            pass "Icertis Business API host reachable: ${biz_host}:443"
+        else
+            fail "Cannot reach ${biz_host}:443 — check network/firewall"
         fi
     fi
 

@@ -72,13 +72,14 @@ def load_config(args) -> dict:
         load_dotenv(args.env_file)
 
     return {
-        "veza_url":               args.veza_url       or os.getenv("VEZA_URL"),
-        "veza_api_key":           args.veza_api_key   or os.getenv("VEZA_API_KEY"),
-        "icertis_base_url":       args.base_url       or os.getenv("ICERTIS_BASE_URL"),
-        "icertis_token_url":      args.token_url      or os.getenv("ICERTIS_TOKEN_URL"),
-        "icertis_client_id":      args.client_id      or os.getenv("ICERTIS_CLIENT_ID"),
-        "icertis_client_secret":  args.client_secret  or os.getenv("ICERTIS_CLIENT_SECRET"),
-        "icertis_scope":          args.scope          or os.getenv(
+        "veza_url":                   args.veza_url          or os.getenv("VEZA_URL"),
+        "veza_api_key":               args.veza_api_key      or os.getenv("VEZA_API_KEY"),
+        "icertis_api_url":            args.api_url           or os.getenv("ICERTIS_API_URL"),
+        "icertis_business_api_url":   args.business_api_url  or os.getenv("ICERTIS_BUSINESS_API_URL"),
+        "icertis_token_url":          args.token_url         or os.getenv("ICERTIS_TOKEN_URL"),
+        "icertis_client_id":          args.client_id         or os.getenv("ICERTIS_CLIENT_ID"),
+        "icertis_client_secret":      args.client_secret     or os.getenv("ICERTIS_CLIENT_SECRET"),
+        "icertis_scope":              args.scope             or os.getenv(
             "ICERTIS_SCOPE",
             "api://6c49748d-db77-4577-b9d0-e31330bc889c/.default",
         ),
@@ -88,10 +89,11 @@ def load_config(args) -> dict:
 def _validate_config(config: dict, dry_run: bool) -> None:
     """Exit with a clear error if required config values are absent."""
     source_required = {
-        "ICERTIS_BASE_URL":      config["icertis_base_url"],
-        "ICERTIS_TOKEN_URL":     config["icertis_token_url"],
-        "ICERTIS_CLIENT_ID":     config["icertis_client_id"],
-        "ICERTIS_CLIENT_SECRET": config["icertis_client_secret"],
+        "ICERTIS_API_URL":          config["icertis_api_url"],
+        "ICERTIS_BUSINESS_API_URL": config["icertis_business_api_url"],
+        "ICERTIS_TOKEN_URL":        config["icertis_token_url"],
+        "ICERTIS_CLIENT_ID":        config["icertis_client_id"],
+        "ICERTIS_CLIENT_SECRET":    config["icertis_client_secret"],
     }
     missing = [k for k, v in source_required.items() if not v]
     if missing:
@@ -162,8 +164,9 @@ class IcertisClient:
 
     PAGE_SIZE = 100
 
-    def __init__(self, base_url: str, token: str) -> None:
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, api_url: str, business_api_url: str, token: str) -> None:
+        self.api_url = api_url.rstrip("/")
+        self.business_api_url = business_api_url.rstrip("/")
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -173,9 +176,9 @@ class IcertisClient:
             }
         )
 
-    def _get(self, path: str, params: dict = None) -> dict:
+    def _get(self, base_url: str, path: str, params: dict = None) -> dict:
         """Make an authenticated GET request and return parsed JSON."""
-        url = f"{self.base_url}{path}"
+        url = f"{base_url}{path}"
         try:
             response = self.session.get(url, params=params, timeout=30)
             response.raise_for_status()
@@ -200,7 +203,7 @@ class IcertisClient:
         users, page = [], 1
         while True:
             log.debug("  users page %d", page)
-            result = self._get("/api/v2/users", params={"page": page, "pageSize": self.PAGE_SIZE})
+            result = self._get(self.api_url, "/api/Users", params={"page": page, "pageSize": self.PAGE_SIZE})
             batch = self._unwrap(result)
             if not batch:
                 break
@@ -217,7 +220,7 @@ class IcertisClient:
         groups, page = [], 1
         while True:
             log.debug("  groups page %d", page)
-            result = self._get("/api/v2/groups", params={"page": page, "pageSize": self.PAGE_SIZE})
+            result = self._get(self.api_url, "/api/Groups", params={"page": page, "pageSize": self.PAGE_SIZE})
             batch = self._unwrap(result)
             if not batch:
                 break
@@ -231,7 +234,7 @@ class IcertisClient:
     def get_org_units(self) -> list:
         """Retrieve all Icertis organizational units."""
         log.info("Fetching Icertis org units")
-        result = self._get("/api/v2/organizationalunits")
+        result = self._get(self.business_api_url, "/api/v1/organizationunits")
         org_units = self._unwrap(result)
         log.info("Total org units retrieved: %d", len(org_units))
         return org_units
@@ -239,7 +242,7 @@ class IcertisClient:
     def get_group_members(self, group_id: str) -> list:
         """Retrieve member list for a specific group."""
         try:
-            result = self._get(f"/api/v2/groups/{group_id}/members")
+            result = self._get(self.api_url, f"/api/Groups/{group_id}/members")
             return self._unwrap(result)
         except requests.exceptions.RequestException:
             log.warning("Could not fetch members for group %s — skipping", group_id)
@@ -498,8 +501,9 @@ def parse_args():
     parser.add_argument("--datasource-name", default="Icertis", help="Datasource name in Veza (default: Icertis)")
 
     # Icertis source
-    parser.add_argument("--base-url",        default=None, help="Icertis base URL (env: ICERTIS_BASE_URL)")
-    parser.add_argument("--token-url",       default=None, help="OAuth2 token endpoint (env: ICERTIS_TOKEN_URL)")
+    parser.add_argument("--api-url",          default=None, help="Icertis API base URL for users/groups (env: ICERTIS_API_URL, e.g. https://<tenant>-api.icertis.com)")
+    parser.add_argument("--business-api-url", default=None, help="Icertis Business API base URL for org units (env: ICERTIS_BUSINESS_API_URL, e.g. https://<tenant>-business-api.icertis.com)")
+    parser.add_argument("--token-url",        default=None, help="OAuth2 token endpoint (env: ICERTIS_TOKEN_URL)")
     parser.add_argument("--client-id",       default=None, help="OAuth2 client ID (env: ICERTIS_CLIENT_ID)")
     parser.add_argument("--client-secret",   default=None, help="OAuth2 client secret (env: ICERTIS_CLIENT_SECRET)")
     parser.add_argument(
@@ -540,7 +544,11 @@ def main():
     )
 
     # --- Fetch data ---------------------------------------------------------
-    client = IcertisClient(base_url=config["icertis_base_url"], token=token)
+    client = IcertisClient(
+        api_url=config["icertis_api_url"],
+        business_api_url=config["icertis_business_api_url"],
+        token=token,
+    )
     users     = client.get_users()
     groups    = client.get_groups()
     org_units = client.get_org_units()
