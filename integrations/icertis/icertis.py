@@ -79,10 +79,7 @@ def load_config(args) -> dict:
         "icertis_token_url":          args.token_url         or os.getenv("ICERTIS_TOKEN_URL"),
         "icertis_client_id":          args.client_id         or os.getenv("ICERTIS_CLIENT_ID"),
         "icertis_client_secret":      args.client_secret     or os.getenv("ICERTIS_CLIENT_SECRET"),
-        "icertis_scope":              args.scope             or os.getenv(
-            "ICERTIS_SCOPE",
-            "api://6c49748d-db77-4577-b9d0-e31330bc889c/.default",
-        ),
+        "icertis_scope":              args.scope             or os.getenv("ICERTIS_SCOPE"),
     }
 
 
@@ -94,6 +91,7 @@ def _validate_config(config: dict, dry_run: bool) -> None:
         "ICERTIS_TOKEN_URL":        config["icertis_token_url"],
         "ICERTIS_CLIENT_ID":        config["icertis_client_id"],
         "ICERTIS_CLIENT_SECRET":    config["icertis_client_secret"],
+        "ICERTIS_SCOPE":            config["icertis_scope"],
     }
     missing = [k for k, v in source_required.items() if not v]
     if missing:
@@ -509,10 +507,7 @@ def parse_args():
     parser.add_argument(
         "--scope",
         default=None,
-        help=(
-            "OAuth2 scope value (env: ICERTIS_SCOPE, "
-            "default: api://6c49748d-db77-4577-b9d0-e31330bc889c/.default)"
-        ),
+        help="OAuth2 scope value (env: ICERTIS_SCOPE) — request this value from your Icertis administrator",
     )
 
     return parser.parse_args()

@@ -5,11 +5,12 @@
 #   curl -fsSL https://raw.githubusercontent.com/andrewmusto-git/Icertis/main/integrations/icertis/install_icertis.sh | bash
 #
 # Usage (non-interactive / CI):
-#   ICERTIS_BASE_URL=https://... \
+#   ICERTIS_API_URL=https://... \
+#   ICERTIS_BUSINESS_API_URL=https://... \
 #   ICERTIS_TOKEN_URL=https://... \
 #   ICERTIS_CLIENT_ID=... \
 #   ICERTIS_CLIENT_SECRET=... \
-#   ICERTIS_SCOPE=api://... \
+#   ICERTIS_SCOPE=<value-must-be-requested-from-Icertis> \
 #   VEZA_URL=https://... \
 #   VEZA_API_KEY=... \
 #   bash install_icertis.sh --non-interactive
@@ -176,9 +177,10 @@ else
         : "${ICERTIS_TOKEN_URL:?ICERTIS_TOKEN_URL must be set}"
         : "${ICERTIS_CLIENT_ID:?ICERTIS_CLIENT_ID must be set}"
         : "${ICERTIS_CLIENT_SECRET:?ICERTIS_CLIENT_SECRET must be set}"
+        : "${ICERTIS_SCOPE:?ICERTIS_SCOPE must be set — request the value from your Icertis administrator}"
         : "${VEZA_URL:?VEZA_URL must be set}"
         : "${VEZA_API_KEY:?VEZA_API_KEY must be set}"
-        scope_val="${ICERTIS_SCOPE:-api://6c49748d-db77-4577-b9d0-e31330bc889c/.default}"
+        scope_val="${ICERTIS_SCOPE}"
     else
         # Interactive prompts — read from /dev/tty so curl|bash piping works
         IFS= read -r -p "Icertis API URL for users/groups (e.g. https://yourcompany-api.icertis.com): " ICERTIS_API_URL </dev/tty
@@ -186,9 +188,8 @@ else
         IFS= read -r -p "OAuth2 token URL (e.g. https://login.microsoftonline.com/<tid>/oauth2/v2.0/token): " ICERTIS_TOKEN_URL </dev/tty
         IFS= read -r -p "OAuth2 client ID: " ICERTIS_CLIENT_ID </dev/tty
         IFS= read -r -s -p "OAuth2 client secret: " ICERTIS_CLIENT_SECRET </dev/tty; echo >/dev/tty
-        scope_default="api://6c49748d-db77-4577-b9d0-e31330bc889c/.default"
-        IFS= read -r -p "OAuth2 scope [${scope_default}]: " scope_input </dev/tty
-        scope_val="${scope_input:-${scope_default}}"
+        IFS= read -r -p "OAuth2 scope (request this value from your Icertis administrator): " scope_val </dev/tty
+        [[ -n "${scope_val}" ]] || { echo "ERROR: OAuth2 scope is required" >&2; exit 1; }
         IFS= read -r -p "Veza URL (e.g. https://yourcompany.veza.com): " VEZA_URL </dev/tty
         IFS= read -r -s -p "Veza API key: " VEZA_API_KEY </dev/tty; echo >/dev/tty
     fi
