@@ -2,7 +2,7 @@
 # install_icertis.sh — One-command installer for the Icertis → Veza OAA integration
 #
 # Usage (interactive):
-#   curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/integrations/icertis/install_icertis.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/andrewmusto-git/Icertis/main/integrations/icertis/install_icertis.sh | bash
 #
 # Usage (non-interactive / CI):
 #   ICERTIS_BASE_URL=https://... \
