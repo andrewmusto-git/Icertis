@@ -82,6 +82,7 @@ def load_config(args) -> dict:
         "icertis_client_id":          args.client_id         or os.getenv("ICERTIS_CLIENT_ID"),
         "icertis_client_secret":      args.client_secret     or os.getenv("ICERTIS_CLIENT_SECRET"),
         "icertis_scope":              args.scope             or os.getenv("ICERTIS_SCOPE"),
+        "icertis_http_connect_timeout": args.http_connect_timeout or os.getenv("ICERTIS_HTTP_CONNECT_TIMEOUT"),
         "icertis_http_timeout":       args.http_timeout      or os.getenv("ICERTIS_HTTP_TIMEOUT"),
         "icertis_http_retries":       args.http_retries      or os.getenv("ICERTIS_HTTP_RETRIES"),
     }
@@ -171,11 +172,13 @@ class IcertisClient:
         api_url: str,
         business_api_url: str,
         token: str,
+        connect_timeout_seconds: int = 10,
         timeout_seconds: int = 30,
         max_retries: int = 3,
     ) -> None:
         self.api_url = api_url.rstrip("/")
         self.business_api_url = business_api_url.rstrip("/")
+        self.connect_timeout_seconds = connect_timeout_seconds
         self.timeout_seconds = timeout_seconds
         self.session = requests.Session()
         self.session.headers.update(
@@ -203,13 +206,18 @@ class IcertisClient:
         """Make an authenticated GET request and return parsed JSON."""
         url = f"{base_url}{path}"
         try:
-            response = self.session.get(url, params=params, timeout=(10, self.timeout_seconds))
+            response = self.session.get(
+                url,
+                params=params,
+                timeout=(self.connect_timeout_seconds, self.timeout_seconds),
+            )
             response.raise_for_status()
             return response.json()
         except requests.exceptions.ReadTimeout:
             log.error(
-                "Read timeout on GET %s after %ss. Check network path/firewall/proxy and ICERTIS_HTTP_TIMEOUT.",
+                "Timeout on GET %s (connect=%ss, read=%ss). Check network path/firewall/proxy and HTTP timeout settings.",
                 url,
+                self.connect_timeout_seconds,
                 self.timeout_seconds,
             )
             raise
@@ -542,6 +550,11 @@ def parse_args():
         help="OAuth2 scope value (env: ICERTIS_SCOPE) — request this value from your Icertis administrator",
     )
     parser.add_argument(
+        "--http-connect-timeout",
+        default=None,
+        help="HTTP connect timeout in seconds for Icertis API calls (env: ICERTIS_HTTP_CONNECT_TIMEOUT, default: 10)",
+    )
+    parser.add_argument(
         "--http-timeout",
         default=None,
         help="HTTP read timeout in seconds for Icertis API calls (env: ICERTIS_HTTP_TIMEOUT, default: 30)",
@@ -573,13 +586,17 @@ def main():
     _validate_config(config, args.dry_run)
 
     try:
+        http_connect_timeout = int(config["icertis_http_connect_timeout"] or 10)
         http_timeout = int(config["icertis_http_timeout"] or 30)
         http_retries = int(config["icertis_http_retries"] or 3)
     except ValueError:
-        log.error("ICERTIS_HTTP_TIMEOUT and ICERTIS_HTTP_RETRIES must be integers")
-        print("ERROR: ICERTIS_HTTP_TIMEOUT and ICERTIS_HTTP_RETRIES must be integers")
+        log.error("ICERTIS_HTTP_CONNECT_TIMEOUT, ICERTIS_HTTP_TIMEOUT, and ICERTIS_HTTP_RETRIES must be integers")
+        print("ERROR: ICERTIS_HTTP_CONNECT_TIMEOUT, ICERTIS_HTTP_TIMEOUT, and ICERTIS_HTTP_RETRIES must be integers")
         sys.exit(1)
 
+    if http_connect_timeout < 5:
+        log.warning("ICERTIS_HTTP_CONNECT_TIMEOUT too low (%s). Using minimum of 5 seconds.", http_connect_timeout)
+        http_connect_timeout = 5
     if http_timeout < 5:
         log.warning("ICERTIS_HTTP_TIMEOUT too low (%s). Using minimum of 5 seconds.", http_timeout)
         http_timeout = 5
@@ -600,6 +617,7 @@ def main():
         api_url=config["icertis_api_url"],
         business_api_url=config["icertis_business_api_url"],
         token=token,
+        connect_timeout_seconds=http_connect_timeout,
         timeout_seconds=http_timeout,
         max_retries=http_retries,
     )

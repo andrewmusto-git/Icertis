@@ -333,6 +333,7 @@ VEZA_API_KEY=${VEZA_API_KEY}
 
 # Optional network tuning
 # Increase timeout if your network path to Icertis is slow or proxied.
+ICERTIS_HTTP_CONNECT_TIMEOUT=30
 ICERTIS_HTTP_TIMEOUT=90
 # Retries for transient connection/read failures.
 ICERTIS_HTTP_RETRIES=3

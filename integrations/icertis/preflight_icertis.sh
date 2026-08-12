@@ -164,6 +164,20 @@ check_network() {
     local api_url="${ICERTIS_API_URL:-}"
     local business_api_url="${ICERTIS_BUSINESS_API_URL:-}"
     local veza_url="${VEZA_URL:-}"
+    local connect_timeout="${ICERTIS_HTTP_CONNECT_TIMEOUT:-30}"
+    local read_timeout="${ICERTIS_HTTP_TIMEOUT:-90}"
+    local max_time
+
+    if ! [[ "${connect_timeout}" =~ ^[0-9]+$ ]] || [[ "${connect_timeout}" -lt 1 ]]; then
+        warn "ICERTIS_HTTP_CONNECT_TIMEOUT is invalid (${connect_timeout}) — defaulting to 30"
+        connect_timeout=30
+    fi
+    if ! [[ "${read_timeout}" =~ ^[0-9]+$ ]] || [[ "${read_timeout}" -lt 1 ]]; then
+        warn "ICERTIS_HTTP_TIMEOUT is invalid (${read_timeout}) — defaulting to 90"
+        read_timeout=90
+    fi
+    max_time=$((connect_timeout + read_timeout))
+    info "Network probe timeouts: connect=${connect_timeout}s, read=${read_timeout}s, max=${max_time}s"
 
     if [[ -z "${api_url}" ]]; then
         fail "ICERTIS_API_URL not set — skipping Icertis API connectivity check"
@@ -175,6 +189,25 @@ check_network() {
             pass "Icertis API host reachable: ${host}:443"
         else
             fail "Cannot reach ${host}:443 — check network/firewall"
+        fi
+
+        if command -v curl &>/dev/null; then
+            info "Probing Icertis Users endpoint with curl..."
+            local users_probe users_code users_connect users_tls users_total
+            users_probe=$(curl -sk -o /dev/null \
+                --connect-timeout "${connect_timeout}" \
+                --max-time "${max_time}" \
+                -w "%{http_code} %{time_connect} %{time_appconnect} %{time_total}" \
+                "${api_url}/api/Users?page=1&pageSize=1" 2>/dev/null || echo "000 0 0 0")
+            users_code=$(echo "${users_probe}" | awk '{print $1}')
+            users_connect=$(echo "${users_probe}" | awk '{print $2}')
+            users_tls=$(echo "${users_probe}" | awk '{print $3}')
+            users_total=$(echo "${users_probe}" | awk '{print $4}')
+            if [[ "${users_code}" == "000" ]]; then
+                fail "Icertis Users endpoint probe failed (HTTP 000) — likely handshake/connect timeout"
+            else
+                pass "Icertis Users endpoint reachable (HTTP ${users_code}, connect=${users_connect}s, tls=${users_tls}s, total=${users_total}s)"
+            fi
         fi
     fi
 
@@ -189,6 +222,25 @@ check_network() {
         else
             fail "Cannot reach ${biz_host}:443 — check network/firewall"
         fi
+
+        if command -v curl &>/dev/null; then
+            info "Probing Icertis Business endpoint with curl..."
+            local biz_probe biz_code biz_connect biz_tls biz_total
+            biz_probe=$(curl -sk -o /dev/null \
+                --connect-timeout "${connect_timeout}" \
+                --max-time "${max_time}" \
+                -w "%{http_code} %{time_connect} %{time_appconnect} %{time_total}" \
+                "${business_api_url}/api/v1/organizationunits" 2>/dev/null || echo "000 0 0 0")
+            biz_code=$(echo "${biz_probe}" | awk '{print $1}')
+            biz_connect=$(echo "${biz_probe}" | awk '{print $2}')
+            biz_tls=$(echo "${biz_probe}" | awk '{print $3}')
+            biz_total=$(echo "${biz_probe}" | awk '{print $4}')
+            if [[ "${biz_code}" == "000" ]]; then
+                fail "Icertis Business endpoint probe failed (HTTP 000) — likely handshake/connect timeout"
+            else
+                pass "Icertis Business endpoint reachable (HTTP ${biz_code}, connect=${biz_connect}s, tls=${biz_tls}s, total=${biz_total}s)"
+            fi
+        fi
     fi
 
     if [[ -z "${veza_url}" ]]; then
@@ -198,7 +250,7 @@ check_network() {
         veza_host=$(echo "${veza_url}" | sed -E 's|https?://([^/:]+).*|\1|')
         info "Testing HTTPS ${veza_host}:443..."
         local http_code
-        http_code=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 5 "${veza_url}/" 2>/dev/null || echo "000")
+        http_code=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout "${connect_timeout}" --max-time "${max_time}" "${veza_url}/" 2>/dev/null || echo "000")
         if [[ "${http_code}" != "000" ]]; then
             pass "Veza HTTPS reachable: ${veza_url} (HTTP ${http_code})"
         else
@@ -219,6 +271,9 @@ check_api_auth() {
     local scope="${ICERTIS_SCOPE:-api://6c49748d-db77-4577-b9d0-e31330bc889c/.default}"
     local veza_url="${VEZA_URL:-}"
     local veza_api_key="${VEZA_API_KEY:-}"
+    local connect_timeout="${ICERTIS_HTTP_CONNECT_TIMEOUT:-30}"
+    local read_timeout="${ICERTIS_HTTP_TIMEOUT:-90}"
+    local max_time=$((connect_timeout + read_timeout))
 
     if [[ -z "${token_url}" || -z "${client_id}" || -z "${client_secret}" ]]; then
         fail "Icertis OAuth2 credentials incomplete — skipping auth test"
@@ -226,6 +281,8 @@ check_api_auth() {
         info "Testing OAuth2 token request to ${token_url}..."
         local http_code response_body
         response_body=$(curl -sk -w "\n%{http_code}" \
+            --connect-timeout "${connect_timeout}" \
+            --max-time "${max_time}" \
             -X POST "${token_url}" \
             -d "grant_type=client_credentials" \
             -d "client_id=${client_id}" \
@@ -246,6 +303,8 @@ check_api_auth() {
         info "Testing Veza API key at ${veza_url}..."
         local http_code
         http_code=$(curl -sk -o /dev/null -w "%{http_code}" \
+            --connect-timeout "${connect_timeout}" \
+            --max-time "${max_time}" \
             -H "Authorization: Bearer ${veza_api_key}" \
             "${veza_url}/api/v1/providers" 2>/dev/null || echo "000")
         if [[ "${http_code}" == "200" ]]; then
