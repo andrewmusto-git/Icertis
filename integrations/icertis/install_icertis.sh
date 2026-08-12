@@ -6,11 +6,11 @@
 #
 # Usage (non-interactive / CI):
 #   ICERTIS_API_URL=https://... \
-#   ICERTIS_BUSINESS_API_URL=https://... \
+#   ICERTIS_BUSINESS_API_URL=https://... \   # optional if derivable from ICERTIS_API_URL
 #   ICERTIS_TOKEN_URL=https://... \
 #   ICERTIS_CLIENT_ID=... \
 #   ICERTIS_CLIENT_SECRET=... \
-#   ICERTIS_SCOPE=<value-must-be-requested-from-Icertis> \
+#   ICERTIS_SCOPE=api://<client-id>/.default \   # optional; auto-derived when omitted
 #   VEZA_URL=https://... \
 #   VEZA_API_KEY=... \
 #   bash install_icertis.sh --non-interactive
@@ -54,6 +54,60 @@ ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
+MILESTONE_STEP=0
+MILESTONE_TOTAL=8
+
+milestone() {
+    MILESTONE_STEP=$((MILESTONE_STEP + 1))
+    echo ""
+    echo -e "${BLUE}=== Milestone ${MILESTONE_STEP}/${MILESTONE_TOTAL}: $* ===${NC}"
+}
+
+normalize_api_url() {
+    local value="${1:-}"
+    value="${value%/}"
+    if [[ -z "${value}" ]]; then
+        echo ""
+        return 0
+    fi
+    if [[ "${value}" == *"-api.icertis.com"* ]]; then
+        echo "${value}"
+        return 0
+    fi
+    if [[ "${value}" =~ ^https?://[A-Za-z0-9.-]+$ ]]; then
+        echo "${value}-api.icertis.com"
+        return 0
+    fi
+    echo "${value}"
+}
+
+normalize_business_api_url() {
+    local value="${1:-}"
+    value="${value%/}"
+    if [[ -z "${value}" ]]; then
+        echo ""
+        return 0
+    fi
+    if [[ "${value}" == *"-business-api.icertis.com"* ]]; then
+        echo "${value}"
+        return 0
+    fi
+    if [[ "${value}" =~ ^https?://[A-Za-z0-9.-]+$ ]]; then
+        echo "${value}-business-api.icertis.com"
+        return 0
+    fi
+    echo "${value}"
+}
+
+derive_business_url_from_api() {
+    local api_url="${1:-}"
+    if [[ "${api_url}" == *"-api.icertis.com"* ]]; then
+        echo "${api_url/-api.icertis.com/-business-api.icertis.com}"
+        return 0
+    fi
+    echo ""
+}
+
 _install_pkg() {
     local pkg="$1"
     info "Installing ${pkg}..."
@@ -94,6 +148,7 @@ done
 # ---------------------------------------------------------------------------
 # System dependencies
 # ---------------------------------------------------------------------------
+milestone "Validate and install system dependencies"
 info "Checking system dependencies..."
 
 command -v git &>/dev/null || _install_pkg git
@@ -125,6 +180,7 @@ ok "Python $(python3 -c 'import sys; print(sys.version.split()[0])')"
 # ---------------------------------------------------------------------------
 # Directory layout
 # ---------------------------------------------------------------------------
+milestone "Create installation directories"
 info "Creating directory layout under ${INSTALL_DIR}..."
 mkdir -p "${SCRIPTS_DIR}" "${LOGS_DIR}"
 ok "Directories created"
@@ -132,6 +188,7 @@ ok "Directories created"
 # ---------------------------------------------------------------------------
 # Download integration files
 # ---------------------------------------------------------------------------
+milestone "Download integration artifacts"
 info "Cloning repository (${REPO_URL}, branch: ${BRANCH})..."
 tmp_dir=$(mktemp -d)
 GIT_TERMINAL_PROMPT=0 git clone \
@@ -153,6 +210,7 @@ ok "Integration files installed to ${SCRIPTS_DIR}"
 # ---------------------------------------------------------------------------
 # Python virtual environment
 # ---------------------------------------------------------------------------
+milestone "Create Python virtual environment and install dependencies"
 info "Creating Python virtual environment..."
 python3 -m venv "${SCRIPTS_DIR}/venv" || die "Failed to create virtual environment"
 "${SCRIPTS_DIR}/venv/bin/pip" install --upgrade pip --quiet
@@ -163,6 +221,7 @@ ok "Virtual environment ready"
 # ---------------------------------------------------------------------------
 # .env file
 # ---------------------------------------------------------------------------
+milestone "Configure integration environment (.env)"
 env_file="${SCRIPTS_DIR}/.env"
 
 if [[ -f "${env_file}" && "${OVERWRITE_ENV}" == "false" ]]; then
@@ -173,23 +232,47 @@ else
     if [[ "${NON_INTERACTIVE}" == "true" ]]; then
         # Require all values from environment in non-interactive mode
         : "${ICERTIS_API_URL:?ICERTIS_API_URL must be set}"
-        : "${ICERTIS_BUSINESS_API_URL:?ICERTIS_BUSINESS_API_URL must be set}"
         : "${ICERTIS_TOKEN_URL:?ICERTIS_TOKEN_URL must be set}"
         : "${ICERTIS_CLIENT_ID:?ICERTIS_CLIENT_ID must be set}"
         : "${ICERTIS_CLIENT_SECRET:?ICERTIS_CLIENT_SECRET must be set}"
-        : "${ICERTIS_SCOPE:?ICERTIS_SCOPE must be set — request the value from your Icertis administrator}"
         : "${VEZA_URL:?VEZA_URL must be set}"
         : "${VEZA_API_KEY:?VEZA_API_KEY must be set}"
-        scope_val="${ICERTIS_SCOPE}"
+
+        ICERTIS_API_URL="$(normalize_api_url "${ICERTIS_API_URL}")"
+        if [[ -n "${ICERTIS_BUSINESS_API_URL:-}" ]]; then
+            ICERTIS_BUSINESS_API_URL="$(normalize_business_api_url "${ICERTIS_BUSINESS_API_URL}")"
+        else
+            ICERTIS_BUSINESS_API_URL="$(derive_business_url_from_api "${ICERTIS_API_URL}")"
+        fi
+        [[ -n "${ICERTIS_BUSINESS_API_URL}" ]] || die "ICERTIS_BUSINESS_API_URL must be set (or derivable from ICERTIS_API_URL)"
+
+        if [[ -n "${ICERTIS_SCOPE:-}" ]]; then
+            scope_val="${ICERTIS_SCOPE}"
+        else
+            scope_val="api://${ICERTIS_CLIENT_ID}/.default"
+            info "ICERTIS_SCOPE not provided; defaulting to ${scope_val}"
+        fi
     else
         # Interactive prompts — read from /dev/tty so curl|bash piping works
-        IFS= read -r -p "Icertis API URL for users/groups (e.g. https://yourcompany-api.icertis.com): " ICERTIS_API_URL </dev/tty
-        IFS= read -r -p "Icertis Business API URL for org units (e.g. https://yourcompany-business-api.icertis.com): " ICERTIS_BUSINESS_API_URL </dev/tty
+        IFS= read -r -p "Icertis API URL for users/groups (e.g. https://yourcompany-api.icertis.com or tenant base like https://yourcompany): " ICERTIS_API_URL </dev/tty
+        ICERTIS_API_URL="$(normalize_api_url "${ICERTIS_API_URL}")"
+
+        IFS= read -r -p "Icertis Business API URL for org units (optional; press Enter to auto-derive from API URL): " ICERTIS_BUSINESS_API_URL </dev/tty
+        if [[ -n "${ICERTIS_BUSINESS_API_URL}" ]]; then
+            ICERTIS_BUSINESS_API_URL="$(normalize_business_api_url "${ICERTIS_BUSINESS_API_URL}")"
+        else
+            ICERTIS_BUSINESS_API_URL="$(derive_business_url_from_api "${ICERTIS_API_URL}")"
+        fi
+        [[ -n "${ICERTIS_BUSINESS_API_URL}" ]] || die "Could not derive business API URL. Please provide ICERTIS_BUSINESS_API_URL explicitly."
+
         IFS= read -r -p "OAuth2 token URL (e.g. https://login.microsoftonline.com/<tid>/oauth2/v2.0/token): " ICERTIS_TOKEN_URL </dev/tty
         IFS= read -r -p "OAuth2 client ID: " ICERTIS_CLIENT_ID </dev/tty
         IFS= read -r -s -p "OAuth2 client secret: " ICERTIS_CLIENT_SECRET </dev/tty; echo >/dev/tty
-        IFS= read -r -p "OAuth2 scope (request this value from your Icertis administrator): " scope_val </dev/tty
-        [[ -n "${scope_val}" ]] || { echo "ERROR: OAuth2 scope is required" >&2; exit 1; }
+        IFS= read -r -p "OAuth2 scope (press Enter for default api://<client_id>/.default): " scope_val </dev/tty
+        if [[ -z "${scope_val}" ]]; then
+            scope_val="api://${ICERTIS_CLIENT_ID}/.default"
+            info "Using derived OAuth2 scope: ${scope_val}"
+        fi
         IFS= read -r -p "Veza URL (e.g. https://yourcompany.veza.com): " VEZA_URL </dev/tty
         IFS= read -r -s -p "Veza API key: " VEZA_API_KEY </dev/tty; echo >/dev/tty
     fi
@@ -218,6 +301,7 @@ fi
 # ---------------------------------------------------------------------------
 # Cron job setup
 # ---------------------------------------------------------------------------
+milestone "Configure scheduled execution (optional)"
 if [[ "${NON_INTERACTIVE}" == "false" && "${SETUP_CRON}" == "false" ]]; then
     IFS= read -r -p "[SETUP] Set up daily cron job to push data to Veza at 02:00? [y/N]: " _cron_answer </dev/tty
     [[ "${_cron_answer,,}" == "y" ]] && SETUP_CRON=true
@@ -249,6 +333,7 @@ fi
 # ---------------------------------------------------------------------------
 # Optional first-run push
 # ---------------------------------------------------------------------------
+milestone "Run initial integration push (optional)"
 if [[ "${NON_INTERACTIVE}" == "false" && "${RUN_NOW}" == "false" ]]; then
     IFS= read -r -p "[SETUP] Run the integration now to perform the initial push to Veza? [y/N]: " _run_answer </dev/tty
     [[ "${_run_answer,,}" == "y" ]] && RUN_NOW=true
@@ -266,6 +351,7 @@ fi
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
+milestone "Finalize installation"
 echo ""
 echo -e "${GREEN}======================================================${NC}"
 echo -e "${GREEN} Icertis → Veza OAA integration installed!${NC}"
