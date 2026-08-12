@@ -13,7 +13,12 @@
 #   ICERTIS_SCOPE=api://<client-id>/.default \   # optional; auto-derived when omitted
 #   VEZA_URL=https://... \
 #   VEZA_API_KEY=... \
-#   bash install_icertis.sh --non-interactive
+#   bash install_icertis.sh --non-interactive --create-new-env
+#
+# Env file behavior flags:
+#   --use-current-env   Keep existing .env (if present) and skip reconfiguration
+#   --create-new-env    Force creation of a new .env (overwrite existing)
+#   --overwrite-env     Backward-compatible alias for --create-new-env
 
 set -uo pipefail
 
@@ -29,6 +34,7 @@ BRANCH="${BRANCH:-main}"
 INTEGRATION_SUBDIR="integrations/${INTEGRATION_SLUG}"
 NON_INTERACTIVE=false
 OVERWRITE_ENV=false
+ENV_FILE_MODE="prompt"   # prompt | use | create
 SETUP_CRON=false
 RUN_NOW=false
 
@@ -134,7 +140,9 @@ check_python_version() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --non-interactive) NON_INTERACTIVE=true ;;
-        --overwrite-env)   OVERWRITE_ENV=true   ;;
+        --overwrite-env)   OVERWRITE_ENV=true; ENV_FILE_MODE="create" ;;
+        --create-new-env)  OVERWRITE_ENV=true; ENV_FILE_MODE="create" ;;
+        --use-current-env) OVERWRITE_ENV=false; ENV_FILE_MODE="use" ;;
         --setup-cron)      SETUP_CRON=true       ;;
         --run-now)         RUN_NOW=true          ;;
         --install-dir)     INSTALL_DIR="$2"; SCRIPTS_DIR="${INSTALL_DIR}/scripts"; LOGS_DIR="${INSTALL_DIR}/logs"; shift ;;
@@ -223,10 +231,43 @@ ok "Virtual environment ready"
 # ---------------------------------------------------------------------------
 milestone "Configure integration environment (.env)"
 env_file="${SCRIPTS_DIR}/.env"
+configure_env=true
 
-if [[ -f "${env_file}" && "${OVERWRITE_ENV}" == "false" ]]; then
-    warn ".env already exists — skipping (use --overwrite-env to replace)"
-else
+if [[ -f "${env_file}" ]]; then
+    case "${ENV_FILE_MODE}" in
+        use)
+            warn ".env already exists — using current file (--use-current-env)"
+            configure_env=false
+            ;;
+        create)
+            info ".env already exists — creating a new file (--create-new-env)"
+            ;;
+        prompt)
+            if [[ "${NON_INTERACTIVE}" == "true" ]]; then
+                warn ".env already exists — using current file by default in non-interactive mode"
+                warn "Use --create-new-env to regenerate .env"
+                configure_env=false
+            else
+                IFS= read -r -p "A .env file already exists. Use current file or create new one? [use/new] (default: use): " _env_choice </dev/tty
+                case "${_env_choice,,}" in
+                    new|n)
+                        info "Creating a new .env file"
+                        ;;
+                    *)
+                        warn "Keeping existing .env file"
+                        configure_env=false
+                        ;;
+                esac
+            fi
+            ;;
+        *)
+            warn "Unknown ENV_FILE_MODE (${ENV_FILE_MODE}) — using current .env"
+            configure_env=false
+            ;;
+    esac
+fi
+
+if [[ "${configure_env}" == "true" ]]; then
     info "Configuring .env..."
 
     if [[ "${NON_INTERACTIVE}" == "true" ]]; then
