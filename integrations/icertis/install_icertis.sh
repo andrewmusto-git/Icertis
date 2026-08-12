@@ -331,6 +331,12 @@ ICERTIS_SCOPE=${scope_val}
 VEZA_URL=${VEZA_URL}
 VEZA_API_KEY=${VEZA_API_KEY}
 
+# Optional network tuning
+# Increase timeout if your network path to Icertis is slow or proxied.
+ICERTIS_HTTP_TIMEOUT=90
+# Retries for transient connection/read failures.
+ICERTIS_HTTP_RETRIES=3
+
 # OAA Provider Settings
 # PROVIDER_NAME=Icertis
 # DATASOURCE_NAME=Icertis

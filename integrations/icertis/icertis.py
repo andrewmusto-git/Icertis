@@ -21,6 +21,8 @@ import requests
 from dotenv import load_dotenv
 from oaaclient.client import OAAClient, OAAClientError
 from oaaclient.templates import CustomApplication, OAAPermission
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -80,6 +82,8 @@ def load_config(args) -> dict:
         "icertis_client_id":          args.client_id         or os.getenv("ICERTIS_CLIENT_ID"),
         "icertis_client_secret":      args.client_secret     or os.getenv("ICERTIS_CLIENT_SECRET"),
         "icertis_scope":              args.scope             or os.getenv("ICERTIS_SCOPE"),
+        "icertis_http_timeout":       args.http_timeout      or os.getenv("ICERTIS_HTTP_TIMEOUT"),
+        "icertis_http_retries":       args.http_retries      or os.getenv("ICERTIS_HTTP_RETRIES"),
     }
 
 
@@ -162,9 +166,17 @@ class IcertisClient:
 
     PAGE_SIZE = 100
 
-    def __init__(self, api_url: str, business_api_url: str, token: str) -> None:
+    def __init__(
+        self,
+        api_url: str,
+        business_api_url: str,
+        token: str,
+        timeout_seconds: int = 30,
+        max_retries: int = 3,
+    ) -> None:
         self.api_url = api_url.rstrip("/")
         self.business_api_url = business_api_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -174,13 +186,33 @@ class IcertisClient:
             }
         )
 
+        retry = Retry(
+            total=max_retries,
+            connect=max_retries,
+            read=max_retries,
+            backoff_factor=1.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=frozenset(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+
     def _get(self, base_url: str, path: str, params: dict = None) -> dict:
         """Make an authenticated GET request and return parsed JSON."""
         url = f"{base_url}{path}"
         try:
-            response = self.session.get(url, params=params, timeout=30)
+            response = self.session.get(url, params=params, timeout=(10, self.timeout_seconds))
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.ReadTimeout:
+            log.error(
+                "Read timeout on GET %s after %ss. Check network path/firewall/proxy and ICERTIS_HTTP_TIMEOUT.",
+                url,
+                self.timeout_seconds,
+            )
+            raise
         except requests.exceptions.HTTPError as exc:
             log.error("HTTP error on GET %s: %s", url, exc)
             raise
@@ -509,6 +541,16 @@ def parse_args():
         default=None,
         help="OAuth2 scope value (env: ICERTIS_SCOPE) — request this value from your Icertis administrator",
     )
+    parser.add_argument(
+        "--http-timeout",
+        default=None,
+        help="HTTP read timeout in seconds for Icertis API calls (env: ICERTIS_HTTP_TIMEOUT, default: 30)",
+    )
+    parser.add_argument(
+        "--http-retries",
+        default=None,
+        help="Retry count for transient HTTP/connectivity failures (env: ICERTIS_HTTP_RETRIES, default: 3)",
+    )
 
     return parser.parse_args()
 
@@ -530,6 +572,21 @@ def main():
     config = load_config(args)
     _validate_config(config, args.dry_run)
 
+    try:
+        http_timeout = int(config["icertis_http_timeout"] or 30)
+        http_retries = int(config["icertis_http_retries"] or 3)
+    except ValueError:
+        log.error("ICERTIS_HTTP_TIMEOUT and ICERTIS_HTTP_RETRIES must be integers")
+        print("ERROR: ICERTIS_HTTP_TIMEOUT and ICERTIS_HTTP_RETRIES must be integers")
+        sys.exit(1)
+
+    if http_timeout < 5:
+        log.warning("ICERTIS_HTTP_TIMEOUT too low (%s). Using minimum of 5 seconds.", http_timeout)
+        http_timeout = 5
+    if http_retries < 0:
+        log.warning("ICERTIS_HTTP_RETRIES cannot be negative (%s). Using 0.", http_retries)
+        http_retries = 0
+
     # --- Authenticate -------------------------------------------------------
     token = get_access_token(
         token_url=config["icertis_token_url"],
@@ -543,6 +600,8 @@ def main():
         api_url=config["icertis_api_url"],
         business_api_url=config["icertis_business_api_url"],
         token=token,
+        timeout_seconds=http_timeout,
+        max_retries=http_retries,
     )
     users     = client.get_users()
     groups    = client.get_groups()
